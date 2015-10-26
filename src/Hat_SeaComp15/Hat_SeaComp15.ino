@@ -1,7 +1,8 @@
 #include <Streaming.h>
 #include <FiniteStateMachine.h>
 #include <Metro.h>
-#include "FastLED.h"
+#include <Bounce.h>
+#include <FastLED.h>
 
 #include "Accelerometer.h"
 
@@ -26,7 +27,10 @@ CRGB leds[NUM_LEDS];
 
 #define N_UPDATES 5
 
-int resting[3]; // resting state
+// tie the pushbutton to pines 5 and 6.  We'll use 6 as a ground and 5 pulled-up.
+#define BUTTON_IN 5
+#define BUTTON_GND 6
+Bounce calButton= Bounce(BUTTON_IN, 25UL);
 
 void setup()
 {
@@ -36,17 +40,22 @@ void setup()
   // tell FastLED about the LED strip configuration
   FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   
-  for(int i=0; i<N_UPDATES; i++) accel.update();
   accel.calibrate();
-  for(int i=0; i<N_UPDATES; i++) accel.update();
-  resting[0] = accel.accel(0);
-  resting[1] = accel.accel(1);
-  resting[2] = accel.accel(2);
+
+  pinMode(BUTTON_IN, INPUT_PULLUP);
+  digitalWrite(BUTTON_GND, LOW);
+  pinMode(BUTTON_GND, OUTPUT);
 }
 
 
 void loop()
 {
+  // check for recalibrate press
+  if( calButton.update() && calButton.read()==LOW ) {
+    Serial << F("Calibrating") << endl;
+    accel.calibrate();
+  }
+  
   // get accelerometer data
   for(int i=0; i<N_UPDATES; i++) accel.update();
 //  int pitch = accel.pitch();

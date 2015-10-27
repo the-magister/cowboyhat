@@ -100,10 +100,29 @@ void atRestUpdate() {
   // a colored dot sweeping back and forth, with fading trails
   static byte gHue = 0;
 
-  fadeToBlackBy( leds, NUM_LEDS, 20);
-  int pos = beatsin16(20, 0, NUM_LEDS);
-  leds[pos] += CHSV( gHue, 255, 255);
-  if( pos==0 ) gHue=random8();
+  fadeToBlackBy(leds, NUM_LEDS, 1);
+//  int pos = beatsin16(20, 0, NUM_LEDS);
+  static byte pos=0;
+  static int dir=1;
+  static Metro advancePos(100);
+  
+  if(advancePos.check()) {
+    if(dir>0) {
+      pos+=dir;
+      pos %= NUM_LEDS;
+    } else {
+      if(pos==0) pos=NUM_LEDS-1;
+      else pos--;
+    }
+    advancePos.interval(random8(25,255));
+    advancePos.reset();
+    
+    if(random8(100) < 10) dir=-dir;
+  }
+  
+  leds[pos] += CHSV(gHue, 255, 255);
+//  if( pos==0 ) gHue=random8();
+  gHue++;
 
 }
 

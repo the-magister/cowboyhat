@@ -25,7 +25,7 @@ CRGB leds[NUM_LEDS];
 
 #define FRAMES_PER_SECOND  30
 
-#define N_UPDATES 5
+#define N_UPDATES 10
 
 // tie the pushbutton to pines 5 and 6.  We'll use 6 as a ground and 5 pulled-up.
 #define BUTTON_IN 8
@@ -85,7 +85,7 @@ void loop()
   
   // gestures:
   // look down: get a headlamp
-  if( accel.roll() >= 40 ) fsm.transitionTo(lookDown);
+  if( accel.roll() <= -40 ) fsm.transitionTo(lookDown);
   // don't move: get an idle display
   else if( idleCount>=10 ) fsm.transitionTo(atRest);
   // otherwise, we're moving around
@@ -180,20 +180,33 @@ void areMovingUpdate() {
   }
 */
 
+  // update the lights
   static byte gHue = random8(0,255);
   // FastLED's built-in rainbow generator
   fill_rainbow( leds, NUM_LEDS, gHue++, 360/(NUM_LEDS-1));
   
+  // possibly adjust brightness on an interval
+  static Metro updateInterval(5UL);
+  if( ! updateInterval.check() ) return;
+
   static byte mb = 128;
 
-  byte ac = abs(accel.milligee()-1000);
-  if( ac >= 75 && mb < 255 ) mb++;
-  if( ac < 75 && mb > 50) mb--;
+  static int lmg = accel.milligee();
+  int mg = accel.milligee();
+
+  int diff = abs(lmg-mg); // could be 2000, at most.
+  if( diff >= 50 && mb < 255 ) mb++;
+  if( diff < 10 && mb > 10) mb--;  
   
   FastLED.setBrightness(mb);
+  
+//  Serial << diff << "\t" << mb << endl;
+//  delay(25);
+  
+  lmg = mg;
 
 }
 
 boolean isAround(int c, int y) {
-  return( c >= y-3 && c <= y+3 );
+  return( c >= y-5 && c <= y+5 );
 }

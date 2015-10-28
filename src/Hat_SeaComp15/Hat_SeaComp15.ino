@@ -17,7 +17,7 @@ State areMoving = State(areMovingEnter, areMovingUpdate, NULL);
 FSM fsm = FSM(atRest); //initialize state machine, start in state: atRest
 
 #define DATA_PIN    4
-
+#define GND_PIN 5
 #define LED_TYPE    WS2812
 #define COLOR_ORDER RGB
 #define NUM_LEDS    10
@@ -28,8 +28,8 @@ CRGB leds[NUM_LEDS];
 #define N_UPDATES 5
 
 // tie the pushbutton to pines 5 and 6.  We'll use 6 as a ground and 5 pulled-up.
-#define BUTTON_IN 5
-#define BUTTON_GND 6
+#define BUTTON_IN 8
+#define BUTTON_GND 9
 Bounce calButton= Bounce(BUTTON_IN, 25UL);
 
 void setup()
@@ -37,14 +37,20 @@ void setup()
   // initialize the serial communications:
   Serial.begin(115200);
 
+  digitalWrite(GND_PIN, LOW);
+  pinMode(GND_PIN, OUTPUT);
+
+  pinMode(BUTTON_IN, INPUT_PULLUP);
+  digitalWrite(BUTTON_GND, LOW);
+  pinMode(BUTTON_GND, OUTPUT);
+
+  delay(1000); // for upload and to make sure we don't overload the USB to supply power.
+
   // tell FastLED about the LED strip configuration
   FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   
   accel.calibrate();
 
-  pinMode(BUTTON_IN, INPUT_PULLUP);
-  digitalWrite(BUTTON_GND, LOW);
-  pinMode(BUTTON_GND, OUTPUT);
 }
 
 

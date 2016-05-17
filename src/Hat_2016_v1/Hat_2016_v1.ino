@@ -1,8 +1,8 @@
+#include <FastLED.h>
 #include <Streaming.h>
 #include <FiniteStateMachine.h>
 #include <Metro.h>
 #include <Bounce.h>
-#include <FastLED.h>
 
 #include "Accelerometer.h"
 
@@ -14,23 +14,23 @@ State atRest = State(atRestEnter, atRestUpdate, NULL);
 State lookDown = State(lookDownEnter, lookDownUpdate, NULL);
 State areMoving = State(areMovingEnter, areMovingUpdate, NULL);
 
-FSM fsm = FSM(atRest); //initialize state machine, start in state: atRest
+FSM fsm = FSM(atRest); // initialize state machine, start in state: atRest
 
-#define DATA_PIN    4
-#define GND_PIN 5
-#define LED_TYPE    WS2812
+#define DATA_PIN 4 // data
+#define GND_PIN 5 // will set to gnd.
+#define LED_TYPE WS2812 // Could try WS2812B?
 #define COLOR_ORDER RGB
-#define NUM_LEDS    10
+#define NUM_LEDS 10
 CRGB leds[NUM_LEDS];
 
 #define FRAMES_PER_SECOND 30
 
 #define N_UPDATES 10
 
-// tie the pushbutton to pines 5 and 6.  We'll use 6 as a ground and 5 pulled-up.
+// tie the pushbutton to pins 8 and 9.  We'll use 9 as a ground and 8 pulled-up.
 #define BUTTON_IN 8
 #define BUTTON_GND 9
-Bounce calButton= Bounce(BUTTON_IN, 25UL);
+Bounce calButton = Bounce(BUTTON_IN, 25UL);
 
 void setup()
 {
@@ -41,6 +41,7 @@ void setup()
   pinMode(GND_PIN, OUTPUT);
 
   pinMode(BUTTON_IN, INPUT_PULLUP);
+  
   digitalWrite(BUTTON_GND, LOW);
   pinMode(BUTTON_GND, OUTPUT);
 
@@ -60,18 +61,23 @@ void loop()
     Serial << F("Calibrating") << endl;
     accel.calibrate();
   }
-  
+
+  // update the lights  
+  static Metro ledUpdate(1000UL/FRAMES_PER_SECOND);
+  if( ledUpdate.check() ) { 
+    FastLED.show();
+  } else {
+    // dump on an interval
+    static Metro printEvery(500);
+    if( printEvery.check() ) accel.dump();
+  }
+
   // get accelerometer data
-  for(int i=0; i<N_UPDATES; i++) accel.update();
+  accel.update();
+//  for(int i=0; i<N_UPDATES; i++) accel.update();
 //  int pitch = accel.pitch();
 //  int roll = accel.roll();
 //  int milligee = accel.milligee();
-  
-  // dump on an interval
-  static Metro printEvery(500);
-  if( printEvery.check() ) { 
-    accel.dump();
-  }
   
    // by default, we're moving
   fsm.transitionTo( areMoving );
@@ -80,42 +86,9 @@ void loop()
   
   if( atRestCheck() ) fsm.transitionTo( atRest );
          
- /*
-  // lookdown gesture has highest priority
-  boolean isLD = isInGesture(lookDownTimer, wasLD, 
-    accel.roll() <= -40
-  );
-  if( wasLD != isLD ) {
-    Serial << "LD changed: " << isLD << endl;
-    wasLD = isLD;
-    wasIdle = false;
-    if( isLD ) fsm.transitionTo(lookDown);
-  }
-  
-  // idle gesture has next priority
-  if( !isLD ) {
-    boolean isIdle = isInGesture(idleTimer, wasIdle, 
-      isAround(accel.accel(0), 0, 20) && isAround(accel.accel(1), 0, 20) && isAround(accel.accel(2), 100, 20)
-      //isAround(accel.milligee(), 1000, 50)
-    );
-    if( wasIdle != isIdle ) {
-      Serial << "Idle changed: " << isIdle << endl;
-      wasIdle = isIdle;
-      wasLD = false;
-      if( isIdle ) fsm.transitionTo(atRest);
-    }
-  }
-  
-  // moving gesture has next priority
-  if( !isLD && !isIdle
-  
-*/
   // update the state machine
   fsm.update();
 
-  // update the lights  
-  static Metro ledUpdate(1000UL/FRAMES_PER_SECOND);
-  if( ledUpdate.check() ) FastLED.show();
 
 }
 

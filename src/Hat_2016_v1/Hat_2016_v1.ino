@@ -73,8 +73,8 @@ void loop()
   }
 
   // get accelerometer data
-  accel.update();
-//  for(int i=0; i<N_UPDATES; i++) accel.update();
+//  accel.update();
+  for(int i=0; i<N_UPDATES; i++) accel.update();
 //  int pitch = accel.pitch();
 //  int roll = accel.roll();
 //  int milligee = accel.milligee();

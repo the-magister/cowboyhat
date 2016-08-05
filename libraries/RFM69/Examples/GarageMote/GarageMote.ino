@@ -1,7 +1,8 @@
 // **********************************************************************************************************
-// GarageMote garage door controller sketch that works with Moteinos equipped with HopeRF RFM69W/RFM69HW
-// Can be adapted to use Moteinos using RFM12B
-// 2013-09-13 (C) felix@lowpowerlab.com, http://www.LowPowerLab.com
+// GarageMote garage door controller sketch that works with Moteinos equipped with RFM69W/RFM69HW
+// Can be adapted to use Moteinos/Arduinos using RFM12B or other RFM69 variants (RFM69CW, RFM69HCW)
+// http://www.LowPowerLab.com/GarageMote
+// 2015-05-05 (C) Felix Rusu of http://www.LowPowerLab.com/
 // **********************************************************************************************************
 // It uses 2 hall effect sensors (and magnets mounted on the garage belt/chain) to detect the position of the
 // door, and a small signal relay to be able to toggle the garage opener.
@@ -11,27 +12,55 @@
 //    - solid OFF - door is in closed position
 //    - blinking - door is not in either open/close position
 //    - pulsing - door is in motion
-// **********************************************************************************************************
-// Creative Commons Attrib Share-Alike License
-// You are free to use/extend this code/library but please abide with the CCSA license:
-// http://creativecommons.org/licenses/by-sa/3.0/
-// **********************************************************************************************************
+// **********************************************************************************
+// License
+// **********************************************************************************
+// This program is free software; you can redistribute it 
+// and/or modify it under the terms of the GNU General    
+// Public License as published by the Free Software       
+// Foundation; either version 3 of the License, or        
+// (at your option) any later version.                    
+//                                                        
+// This program is distributed in the hope that it will   
+// be useful, but WITHOUT ANY WARRANTY; without even the  
+// implied warranty of MERCHANTABILITY or FITNESS FOR A   
+// PARTICULAR PURPOSE. See the GNU General Public        
+// License for more details.                              
+//                                                        
+// You should have received a copy of the GNU General    
+// Public License along with this program.
+// If not, see <http://www.gnu.org/licenses/>.
+//                                                        
+// Licence can be viewed at                               
+// http://www.gnu.org/licenses/gpl-3.0.txt
+//
+// Please maintain this license information along with authorship
+// and copyright notices in any redistribution of this code
+// ***************************************************************************************************************************
+//#define WEATHERSHIELD            //uncomment if WeatherShield is present to report temp/humidity/pressure periodically
+//#define WEATHERSENDDELAY  300000 // send WeatherShield data every so often (ms)
+// ***************************************************************************************************************************
+#include <RFM69.h>         //get it here: http://github.com/lowpowerlab/rfm69
+#include <SPIFlash.h>      //get it here: http://github.com/lowpowerlab/spiflash
+#include <WirelessHEX69.h> //get it here: https://github.com/LowPowerLab/WirelessProgramming
+#include <SPI.h>           //comes with Arduino IDE (www.arduino.cc)
 
-#include <RFM69.h>  //install this library in your Arduino library directory from https://github.com/LowPowerLab/RFM69
-#include <SPI.h>
-
+#ifdef WEATHERSHIELD
+  #include <SFE_BMP180.h>    //get it here: https://github.com/LowPowerLab/SFE_BMP180
+  #include <SI7021.h>        //get it here: https://github.com/LowPowerLab/SI7021
+  #include <Wire.h>
+#endif
 //*****************************************************************************************************************************
-// ADJUST THE SETTINGS BELOW DEPENDING ON YOUR HARDWARE/SITUATION!
+// ADJUST THE SETTINGS BELOW DEPENDING ON YOUR HARDWARE/TRANSCEIVER SETTINGS/REQUIREMENTS
 //*****************************************************************************************************************************
-#define GATEWAYID     1
-#define NODEID        99
-#define NETWORKID     100
-//Match frequency to the hardware version of the radio on your Moteino (uncomment one):
-//#define FREQUENCY   RF69_433MHZ
-//#define FREQUENCY   RF69_868MHZ
-#define FREQUENCY     RF69_915MHZ
-#define ENCRYPTKEY    "sampleEncryptKey" //has to be same 16 characters/bytes on all nodes, not more not less!
-//#define IS_RFM69HW  //uncomment only for RFM69HW! Leave out if you have RFM69W!
+#define GATEWAYID   1
+#define NODEID      11
+#define NETWORKID   250
+//#define FREQUENCY     RF69_433MHZ
+//#define FREQUENCY     RF69_868MHZ
+#define FREQUENCY       RF69_915MHZ //Match this with the version of your Moteino! (others: RF69_433MHZ, RF69_868MHZ)
+#define ENCRYPTKEY      "sampleEncryptKey" //has to be same 16 characters/bytes on all nodes, not more not less!
+#define IS_RFM69HW      //uncomment only for RFM69HW! Leave out if you have RFM69W!
 
 #define HALLSENSOR1          A0
 #define HALLSENSOR1_EN        4
@@ -70,18 +99,34 @@
   #define DEBUGln(input);
 #endif
 
+#ifdef WEATHERSHIELD
+  SI7021 weatherShield_SI7021;
+  SFE_BMP180 weatherShield_BMP180;
+#endif
+
+//function prototypes
 void setStatus(byte newSTATUS, boolean reportStatus=true);
+void reportStatus();
+boolean hallSensorRead(byte which);
+void pulseRelay();
+
+//global program variables
 byte STATUS;
-long lastStatusTimestamp=0;
-byte lastRequesterNodeID=0;
-long ledPulseTimestamp=0;
+unsigned long lastStatusTimestamp=0;
+unsigned long ledPulseTimestamp=0;
+unsigned long lastWeatherSent=0;
 int ledPulseValue=0;
 boolean ledPulseDirection=false; //false=down, true=up
 RFM69 radio;
+char Pstr[10];
+char sendBuf[30];
+SPIFlash flash(8, 0xEF30); //WINDBOND 4MBIT flash chip on CS pin D8 (default for Moteino)
 
 void setup(void)
 {
+#ifdef SERIAL_EN
   Serial.begin(SERIAL_BAUD);
+#endif
   pinMode(HALLSENSOR1, INPUT);
   pinMode(HALLSENSOR2, INPUT);
   pinMode(HALLSENSOR1_EN, OUTPUT);
@@ -92,38 +137,49 @@ void setup(void)
   
   radio.initialize(FREQUENCY,NODEID,NETWORKID);
 #ifdef IS_RFM69HW
-  radio.setHighPower(); //must include only for RFM69HW!
+  radio.setHighPower(); //uncomment only for RFM69HW!
 #endif
   radio.encrypt(ENCRYPTKEY);
 
   char buff[50];
   sprintf(buff, "GarageMote : %d Mhz...", FREQUENCY==RF69_433MHZ ? 433 : FREQUENCY==RF69_868MHZ ? 868 : 915);
-  Serial.println(buff);
+  DEBUGln(buff);
 
   if (hallSensorRead(HALLSENSOR_OPENSIDE)==true)
     setStatus(STATUS_OPEN);
   if (hallSensorRead(HALLSENSOR_CLOSEDSIDE)==true)
     setStatus(STATUS_CLOSED);
   else setStatus(STATUS_UNKNOWN);
+
+#ifdef WEATHERSHIELD
+  //initialize weather shield sensors  
+  weatherShield_SI7021.begin();
+  if (weatherShield_BMP180.begin())
+  { DEBUGln("BMP180 init success"); }
+  else { DEBUGln("BMP180 init fail\n"); }
+#endif
 }
 
-long doorPulseCount = 0;
-char input;
+unsigned long doorPulseCount = 0;
+char input=0;
+double P;
 
 void loop()
 {
+#ifdef SERIAL_EN
   if (Serial.available())
     input = Serial.read();
-    
+#endif
+
   if (input=='r')
   {
-    Serial.println("Relay test...");
+    DEBUGln("Relay test...");
     pulseRelay();
     input = 0;
   }
     
   // UNKNOWN => OPEN/CLOSED
-  if (STATUS == STATUS_UNKNOWN && millis()-lastStatusTimestamp>STATUS_CHANGE_MIN)
+  if (STATUS == STATUS_UNKNOWN && millis()-(lastStatusTimestamp)>STATUS_CHANGE_MIN)
   {
     if (hallSensorRead(HALLSENSOR_OPENSIDE)==true)
       setStatus(STATUS_OPEN);
@@ -131,15 +187,15 @@ void loop()
       setStatus(STATUS_CLOSED);
   }
 
-  // OPEN => CLOSING  
-  if (STATUS == STATUS_OPEN && millis()-lastStatusTimestamp>STATUS_CHANGE_MIN)
+  // OPEN => CLOSING
+  if (STATUS == STATUS_OPEN && millis()-(lastStatusTimestamp)>STATUS_CHANGE_MIN)
   {
     if (hallSensorRead(HALLSENSOR_OPENSIDE)==false)
       setStatus(STATUS_CLOSING);
   }
 
   // CLOSED => OPENING  
-  if (STATUS == STATUS_CLOSED && millis()-lastStatusTimestamp>STATUS_CHANGE_MIN)
+  if (STATUS == STATUS_CLOSED && millis()-(lastStatusTimestamp)>STATUS_CHANGE_MIN)
   {
     if (hallSensorRead(HALLSENSOR_CLOSEDSIDE)==false)
       setStatus(STATUS_OPENING);
@@ -148,13 +204,13 @@ void loop()
   // OPENING/CLOSING => OPEN (when door returns to open due to obstacle or toggle action)
   //                 => CLOSED (when door closes normally from OPEN)
   //                 => UNKNOWN (when more time passes than normally would for a door up/down movement)
-  if ((STATUS == STATUS_OPENING || STATUS == STATUS_CLOSING) && millis()-lastStatusTimestamp>STATUS_CHANGE_MIN)
+  if ((STATUS == STATUS_OPENING || STATUS == STATUS_CLOSING) && millis()-(lastStatusTimestamp)>STATUS_CHANGE_MIN)
   {
     if (hallSensorRead(HALLSENSOR_OPENSIDE)==true)
       setStatus(STATUS_OPEN);
     else if (hallSensorRead(HALLSENSOR_CLOSEDSIDE)==true)
       setStatus(STATUS_CLOSED);
-    else if (millis()-lastStatusTimestamp>DOOR_MOVEMENT_TIME)
+    else if (millis()-(lastStatusTimestamp)>DOOR_MOVEMENT_TIME)
       setStatus(STATUS_UNKNOWN);
   }
   
@@ -162,31 +218,37 @@ void loop()
   {
     byte newStatus=STATUS;
     boolean reportStatusRequest=false;
-    lastRequesterNodeID = radio.SENDERID;
-    DEBUG('[');Serial.print(radio.SENDERID, DEC);Serial.print("] ");
+    DEBUG('[');DEBUG(radio.SENDERID);DEBUG("] ");
     for (byte i = 0; i < radio.DATALEN; i++)
       DEBUG((char)radio.DATA[i]);
 
-    //check for an OPEN/CLOSE/STATUS request
-    if (radio.DATA[0]=='O' && radio.DATA[1]=='P' && radio.DATA[2]=='N')
+    if (radio.DATALEN==3)
     {
-      if (millis()-lastStatusTimestamp > STATUS_CHANGE_MIN && (STATUS == STATUS_CLOSED || STATUS == STATUS_CLOSING || STATUS == STATUS_UNKNOWN))
-        newStatus = STATUS_OPENING;
-      //else radio.Send(requester, "INVALID", 7);
+      //check for an OPEN/CLOSE/STATUS request
+      if (radio.DATA[0]=='O' && radio.DATA[1]=='P' && radio.DATA[2]=='N')
+      {
+        if (millis()-(lastStatusTimestamp) > STATUS_CHANGE_MIN && (STATUS == STATUS_CLOSED || STATUS == STATUS_CLOSING || STATUS == STATUS_UNKNOWN))
+          newStatus = STATUS_OPENING;
+        //else radio.Send(requester, "INVALID", 7);
+      }
+      if (radio.DATA[0]=='C' && radio.DATA[1]=='L' && radio.DATA[2]=='S')
+      {
+        if (millis()-(lastStatusTimestamp) > STATUS_CHANGE_MIN && (STATUS == STATUS_OPEN || STATUS == STATUS_OPENING || STATUS == STATUS_UNKNOWN))
+          newStatus = STATUS_CLOSING;
+        //else radio.Send(requester, "INVALID", 7);
+      }
+      if (radio.DATA[0]=='S' && radio.DATA[1]=='T' && radio.DATA[2]=='S')
+      {
+        reportStatusRequest = true;
+      }
     }
-    if (radio.DATA[0]=='C' && radio.DATA[1]=='L' && radio.DATA[2]=='S')
-    {
-      if (millis()-lastStatusTimestamp > STATUS_CHANGE_MIN && (STATUS == STATUS_OPEN || STATUS == STATUS_OPENING || STATUS == STATUS_UNKNOWN))
-        newStatus = STATUS_CLOSING;
-      //else radio.Send(requester, "INVALID", 7);
-    }
-    if (radio.DATA[0]=='S' && radio.DATA[1]=='T' && radio.DATA[2]=='S')
-    {
-      reportStatusRequest = true;
-    }
+    
+    // wireless programming token check
+    // DO NOT REMOVE, or GarageMote will not be wirelessly programmable any more!
+    CheckForWirelessHEX(radio, flash, true);
 
     //first send any ACK to request
-    DEBUG("   [RX_RSSI:");DEBUG(radio.readRSSI());DEBUG("]");
+    DEBUG("   [RX_RSSI:");DEBUG(radio.RSSI);DEBUG("]");
     if (radio.ACKRequested())
     {
       radio.sendACK();
@@ -214,7 +276,7 @@ void loop()
   }
   if (STATUS == STATUS_OPENING || STATUS == STATUS_CLOSING) //pulse
   {
-    if (millis()-ledPulseTimestamp > LED_PULSE_PERIOD/256)
+    if (millis()-(ledPulseTimestamp) > LED_PULSE_PERIOD/256)
     {
       ledPulseValue = ledPulseDirection ? ledPulseValue + LED_PULSE_PERIOD/256 : ledPulseValue - LED_PULSE_PERIOD/256;
 
@@ -235,13 +297,26 @@ void loop()
   }
   if (STATUS == STATUS_UNKNOWN) //blink
   {
-    if (millis()-ledPulseTimestamp > LED_PULSE_PERIOD/20)
+    if (millis()-(ledPulseTimestamp) > LED_PULSE_PERIOD/20)
     {
       ledPulseDirection = !ledPulseDirection;
       digitalWrite(LED, ledPulseDirection ? HIGH : LOW);
       ledPulseTimestamp = millis();
     }
   }
+  
+#ifdef WEATHERSHIELD
+  if (millis()-lastWeatherSent > WEATHERSENDDELAY)
+  {
+    lastWeatherSent = millis();
+    P = getPressure();
+    P*=0.0295333727; //transform to inHg
+    dtostrf(P, 3,2, Pstr);
+    sprintf(sendBuf, "F:%d H:%d P:%s", weatherShield_SI7021.getFahrenheitHundredths(), weatherShield_SI7021.getHumidityPercent(), Pstr);    
+    byte sendLen = strlen(sendBuf);
+    radio.send(GATEWAYID, sendBuf, sendLen);
+  }
+#endif
 }
 
 //returns TRUE if magnet is next to sensor, FALSE if magnet is away
@@ -255,22 +330,21 @@ boolean hallSensorRead(byte which)
   return reading==0;
 }
 
-void setStatus(byte newSTATUS, boolean reportStatusRequest)
+void setStatus(byte newSTATUS, boolean reportIt)
 {
   if (STATUS != newSTATUS) lastStatusTimestamp = millis();
   STATUS = newSTATUS;
   DEBUGln(STATUS==STATUS_CLOSED ? "CLOSED" : STATUS==STATUS_CLOSING ? "CLOSING" : STATUS==STATUS_OPENING ? "OPENING" : STATUS==STATUS_OPEN ? "OPEN" : "UNKNOWN");
-  if (reportStatusRequest)
+  if (reportIt)
     reportStatus();
 }
 
-boolean reportStatus()
+void reportStatus(void)
 {
-  if (lastRequesterNodeID == 0) return false;
   char buff[10];
   sprintf(buff, STATUS==STATUS_CLOSED ? "CLOSED" : STATUS==STATUS_CLOSING ? "CLOSING" : STATUS==STATUS_OPENING ? "OPENING" : STATUS==STATUS_OPEN ? "OPEN" : "UNKNOWN");
   byte len = strlen(buff);
-  return radio.sendWithRetry(lastRequesterNodeID, buff, len);
+  radio.sendWithRetry(GATEWAYID, buff, len);
 }
 
 void pulseRelay()
@@ -289,3 +363,57 @@ void Blink(byte PIN, byte DELAY_MS)
   delay(DELAY_MS);
   digitalWrite(PIN,LOW);
 }
+
+#ifdef WEATHERSHIELD
+double getPressure()
+{
+  char status;
+  double T,P,p0,a;
+  // If you want sea-level-compensated pressure, as used in weather reports,
+  // you will need to know the altitude at which your measurements are taken.
+  // We're using a constant called ALTITUDE in this sketch:
+  
+  // If you want to measure altitude, and not pressure, you will instead need
+  // to provide a known baseline pressure. This is shown at the end of the sketch.
+  // You must first get a temperature measurement to perform a pressure reading.
+  // Start a temperature measurement:
+  // If request is successful, the number of ms to wait is returned.
+  // If request is unsuccessful, 0 is returned.
+  status = weatherShield_BMP180.startTemperature();
+  if (status != 0)
+  {
+    // Wait for the measurement to complete:
+    delay(status);
+
+    // Retrieve the completed temperature measurement:
+    // Note that the measurement is stored in the variable T.
+    // Function returns 1 if successful, 0 if failure.
+    status = weatherShield_BMP180.getTemperature(T);
+    if (status != 0)
+    {
+      // Start a pressure measurement:
+      // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
+      // If request is successful, the number of ms to wait is returned.
+      // If request is unsuccessful, 0 is returned.
+      status = weatherShield_BMP180.startPressure(3);
+      if (status != 0)
+      {
+        // Wait for the measurement to complete:
+        delay(status);
+
+        // Retrieve the completed pressure measurement:
+        // Note that the measurement is stored in the variable P.
+        // Note also that the function requires the previous temperature measurement (T).
+        // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
+        // Function returns 1 if successful, 0 if failure.
+        status = weatherShield_BMP180.getPressure(P,T);
+        if (status != 0)
+        {
+          return P;
+        }
+      }
+    }        
+  }
+  return 0;
+}
+#endif

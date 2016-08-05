@@ -4,9 +4,12 @@
 #include <Bounce.h>
 #include <FastLED.h>
 
-// radio
-#include <RFM69.h>
-RFM69 radio;
+// radio for Shadows
+#include <RFM69_Sh.h>
+RFM69_Sh radio_Sh;
+// radio for Simon
+#include <RFM69_Si.h>
+RFM69_Si radio_Si;
 
 #include "Accelerometer.h"
 
@@ -26,6 +29,9 @@ State areMoving = State(areMovingEnter, areMovingUpdate, NULL);
 void shadowsDisplayEnter();
 void shadowsDisplayUpdate();
 State shadowsDisplay = State(shadowsDisplayEnter, shadowsDisplayUpdate, NULL);
+void simonDisplayEnter();
+void simonDisplayUpdate();
+State simonDisplay = State(simonDisplayEnter, simonDisplayUpdate, NULL);
 
 FSM fsm = FSM(atRest); //initialize state machine, start in state: atRest
 
@@ -47,11 +53,14 @@ Bounce calButton = Bounce(BUTTON_IN, 25UL);
 
 #define SHADOWS_GROUP 157
 #define SIMON_GROUP 188
-byte currentGroup = SHADOWS_GROUP;
+const byte Ngroups = 2;
+byte groups[Ngroups] = {SHADOWS_GROUP, SIMON_GROUP};
+byte currentGroup;
 
 void setup() {
   Serial.begin(115200);
-
+  Serial << F("Cowboyhat Startup.") << endl;
+  
   digitalWrite(GND_PIN, LOW);
   pinMode(GND_PIN, OUTPUT);
 
@@ -59,34 +68,55 @@ void setup() {
   digitalWrite(BUTTON_GND, LOW);
   pinMode(BUTTON_GND, OUTPUT);
 
-  // put your setup code here, to run once:
-  radio.initialize(RF69_915MHZ, 212, currentGroup);
-  radio.setHighPower(); // using RFM69HW board
-  radio.promiscuous(true); // so broadcasts are received
-
   // tell FastLED about the LED strip configuration
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
 
+  // start the radio on the Shadows network.
+  start_Si_radio();
 }
 
+void start_Sh_radio() {
+  Serial << F("Shadows: radio startup.") << endl;
+  currentGroup=0;
+
+  radio_Sh.initialize(RF69_915MHZ, 212, groups[currentGroup]);
+  radio_Sh.setHighPower(); // using RFM69HW board
+  radio_Sh.promiscuous(true); // so broadcasts are received
+}
+
+void start_Si_radio() {
+  Serial << F("Simon: radio startup.") << endl;
+  currentGroup=1;
+
+  radio_Si.initialize(RF69_915MHZ, 212, groups[currentGroup]);
+  radio_Si.setHighPower(); // using RFM69HW board
+  radio_Si.promiscuous(true); // so broadcasts are received
+}
+
+
 void loop() {
-  // check for recalibrate press
-  if ( calButton.update() && calButton.read() == LOW ) {
-    Serial << F("Calibrating") << endl;
-    accel.calibrate();
-  }
-
-
   // hear from network colleagues, do a display
   static Metro networkTimeout(10000UL);
   static boolean haveNetworkTraffic = false;
-  if ( radio.receiveDone() ) {
+  if ( groups[currentGroup] == SHADOWS_GROUP && radio_Sh.receiveDone() ) {
     networkTimeout.reset();
     haveNetworkTraffic = true;
-    if ( currentGroup == SHADOWS_GROUP ) fsm.transitionTo(shadowsDisplay);
+    fsm.transitionTo(shadowsDisplay);
+  }
+  if ( groups[currentGroup] == SIMON_GROUP && radio_Si.receiveDone() ) {
+    networkTimeout.reset();
+    haveNetworkTraffic = true;
+    fsm.transitionTo(simonDisplay);
   }
 
   if ( networkTimeout.check() ) haveNetworkTraffic = false;
+
+  static Metro groupSwapTimer(10000UL);
+  if( ! haveNetworkTraffic && groupSwapTimer.check() ) {
+    Serial << F("Rotating radio group") << endl;
+    if( currentGroup == 0 ) start_Si_radio();
+    else if( currentGroup == 1 ) start_Sh_radio();
+  }
 
   if ( ! haveNetworkTraffic ) {
 
@@ -117,12 +147,15 @@ void loop() {
     else if ( idleCount >= 10 ) fsm.transitionTo(atRest);
     // otherwise, we're moving around
     else fsm.transitionTo(areMoving);
+
+    // check for recalibrate press
+    if ( calButton.update() && calButton.read() == LOW ) {
+      Serial << F("Calibrating") << endl;
+      accel.calibrate();
+    }
   }
 
   fsm.update();
-
-  static Metro ledUpdate(1000UL / FRAMES_PER_SECOND);
-  if ( ledUpdate.check() ) FastLED.show();
 
 }
 void shadowsDisplayEnter() {
@@ -130,7 +163,7 @@ void shadowsDisplayEnter() {
   // set master brightness control
   FastLED.setBrightness(255);
   // set off
-  fill_solid( leds, NUM_LEDS, CRGB(0, 0, 0));
+  fill_solid( leds, NUM_LEDS, CRGB(8, 8, 8));
 }
 void shadowsDisplayUpdate() {
   unsigned long message; // message 
@@ -139,15 +172,15 @@ void shadowsDisplayUpdate() {
   static word mind[3] = {60,60,60};
   static byte bright[3] = {0,0,0};
   
-  if( radio.receiveDone() && radio.DATALEN==sizeof(message) ) {
+  if( radio_Sh.receiveDone() && radio_Sh.DATALEN==sizeof(message) ) {
 
-    message = *(unsigned long*)radio.DATA; 
+    message = *(unsigned long*)radio_Sh.DATA; 
     
     distance[0] = (message >>  2) & 1023UL; // dumping six MSB
     distance[1] = (message >> 12) & 1023UL; // dumping six MSB
     distance[2] = (message >> 22) & 1023UL; // dumping six MSB
     
-    Serial << distance[0] << "\t" << distance[1] << "\t" << distance[2] << "\t" << endl;
+    Serial << F("Shadows: distances=") << F("\t") << distance[0] << F("\t") << distance[1] << F("\t") << distance[2] << endl;
     
     for(byte i=0;i<3;i++) {
       if( distance[i] > maxd[i] ) maxd[i] = distance[i];
@@ -157,10 +190,42 @@ void shadowsDisplayUpdate() {
     }
 
     fill_solid( leds, NUM_LEDS, CRGB(bright[0], bright[1], bright[2]));
+    FastLED.show();
   }
   
 }
+void simonDisplayEnter() {
+  Serial << F("simonDisply Enter") << endl;
+  // set master brightness control
+  FastLED.setBrightness(255);
+  // set off
+  fill_solid( leds, NUM_LEDS, CRGB(8, 8, 8));
+}
+void simonDisplayUpdate() {
 
+  static byte lastPacket=99;
+
+  if( radio_Si.receiveDone() && radio_Si.DATALEN==23 ) {
+
+    byte thisPacket = radio_Si.DATA[0];
+    if( thisPacket == lastPacket ) return;
+    lastPacket = thisPacket;
+    
+    Serial << F("Simon: packet=") << thisPacket << endl;
+
+    CRGB tower0 = CRGB(radio_Si.DATA[2+0], radio_Si.DATA[2+1], radio_Si.DATA[2+2]);
+    CRGB tower1 = CRGB(radio_Si.DATA[5+0], radio_Si.DATA[5+1], radio_Si.DATA[5+2]);
+    CRGB tower2 = CRGB(radio_Si.DATA[8+0], radio_Si.DATA[8+1], radio_Si.DATA[8+2]);
+    CRGB tower3 = CRGB(radio_Si.DATA[11+0], radio_Si.DATA[11+1], radio_Si.DATA[11+2]);
+    CRGB min = CRGB(8,8,8);
+
+    CRGB color = tower0+tower1+tower2+tower3+min;
+    
+    fill_solid( leds, NUM_LEDS, color );
+    FastLED.show();
+  }
+  
+}
 void atRestEnter() {
   Serial << F("atRest Enter") << endl;
   // set master brightness control
@@ -194,6 +259,7 @@ void atRestUpdate() {
   //  if( pos==0 ) gHue=random8();
   gHue++;
 
+  FastLED.show();
 }
 
 void lookDownEnter() {
@@ -210,6 +276,8 @@ void lookDownUpdate() {
   // brake lights in the back
   leds[4] += CRGB(2, 0, 0);
   leds[5] += CRGB(2, 0, 0);
+
+  FastLED.show();
 }
 
 void areMovingEnter() {
@@ -269,6 +337,7 @@ void areMovingUpdate() {
 
   lmg = mg;
 
+  FastLED.show();
 }
 
 boolean isAround(int c, int y) {
